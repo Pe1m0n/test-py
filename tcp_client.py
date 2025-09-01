@@ -10,42 +10,42 @@ from typing import Dict, List, Optional
 
 class TCPClient:
     """
-    асинхронный TCP клиент.
+    Asynchronous TCP client.
 
-    отвечает за подключение к серверу, отправку PING-запросов,
-    прием и разбор сообщений, логирование результатов и ошибок.
+    Responsible for connecting to the server, sending PING requests,
+    receiving and parsing messages, logging results and errors.
     """
 
     def __init__(self, host: str, port: int):
         self.host = host
         self.port = port
 
-        # сетевые объекты
+        # network objects
         self.reader: Optional[asyncio.StreamReader] = None
         self.writer: Optional[asyncio.StreamWriter] = None
 
-        # флаги и очереди
+        # flags and queues
         self.running: bool = True
         self.message_queue: asyncio.Queue[str] = asyncio.Queue()
 
-        # состо¤ни¤ запросов/ответов
+        # request/response states
         self.responses: Dict[int, List[str]] = defaultdict(list)
         self.pending_requests: List[int] = []
         self.send_times: Dict[int, float] = {}
         self.request_data: Dict[int, Dict[str, str]] = {}
 
-        # таски, которые нужно корректно закрывать
+        # tasks that need to be properly closed
         self.tasks: List[asyncio.Task] = []
 
-        # файлы логов
-        self.log_file = 'client_log.txt'         # событи¤/журнал обмена
-        self.error_log_file = 'client_error.log' # ошибки
+        # log files
+        self.log_file = 'client_log.txt'         # events/exchange log
+        self.error_log_file = 'client_error.log' # errors
         self.setup_logging()
 
-    # --------------------------- Ћќ√»–ќ¬јЌ»≈ ---------------------------------
+    # --------------------------- LOGGING ---------------------------------
     def setup_logging(self) -> None:
-        """Настройка двух раздельных логгеров: событий и ошибок."""
-        # событи¤
+        """Set up two separate loggers: for events and errors."""
+        # events
         self.logger = logging.getLogger('client_logger')
         self.logger.setLevel(logging.INFO)
         fmt_events = logging.Formatter('%(message)s')
@@ -53,7 +53,7 @@ class TCPClient:
         fh_events.setFormatter(fmt_events)
         self.logger.addHandler(fh_events)
 
-        # ошибки
+        # errors
         self.error_logger = logging.getLogger('client_error_logger')
         self.error_logger.setLevel(logging.ERROR)
         fmt_errors = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s')
@@ -61,25 +61,25 @@ class TCPClient:
         fh_errors.setFormatter(fmt_errors)
         self.error_logger.addHandler(fh_errors)
 
-    # --------------------------- —≈“≈¬џ≈ ќѕ≈–ј÷»» ----------------------------
+    # --------------------------- NETWORK OPERATIONS ----------------------------
     async def connect(self) -> None:
-        """Открывает соединение с сервером."""
+        """Opens a connection to the server."""
         try:
             self.reader, self.writer = await asyncio.open_connection(self.host, self.port)
         except Exception as e:
-            # важна эскалаци¤ Ч пусть верхний уровень решает, что делать
+            # important to escalate — let the upper level decide what to do
             self.error_logger.error(f"Connect error: {e}")
             raise
 
     async def send_ping(self, request_number: int) -> None:
-        """Отправка одного PING-запроса вида: "[N] PING\n"."""
+        """Sends a single PING request in the format: '[N] PING\n'."""
         try:
             message = f"[{request_number}] PING\n"
             dt_send = datetime.datetime.now()
             date_str = dt_send.strftime('%Y-%m-%d')
             time_send = dt_send.strftime('%H:%M:%S.%f')[:-3]
 
-            # сохран¤ем исходные данные запроса дл¤ итоговой строки лога
+            # save the original request data for the final log entry
             self.request_data[request_number] = {
                 'date': date_str,
                 'time_send': time_send,
@@ -96,21 +96,21 @@ class TCPClient:
             self.error_logger.error(f"Send PING error (req={request_number}): {e}")
             raise
 
-    # --------------------------- ќЅ–јЅќ“ ј —ќќЅў≈Ќ»… -------------------------
+    # --------------------------- MESSAGE PROCESSING -------------------------
     async def listen_for_messages(self) -> None:
-        """„итает строки из сокета и складывает их в очередь сообщений."""
+        """Reads lines from the socket and puts them into the message queue."""
         while self.running:
             try:
                 assert self.reader is not None, "Reader is not initialized"
                 data = await self.reader.readline()
                 if not data:
-                    # сервер закрыл соединение
+                    # server closed the connection
                     self.running = False
                     return
                 message = data.decode('ascii').strip()
                 await self.message_queue.put(message)
             except asyncio.CancelledError:
-                # корректна¤ отмена
+                # proper cancellation
                 return
             except Exception as e:
                 self.error_logger.error(f"Listen error: {e}")
@@ -118,7 +118,7 @@ class TCPClient:
                 return
 
     async def process_messages(self) -> None:
-        """–азбор сообщений из очереди: keepalive / ответы на запросы."""
+        """Parses messages from the queue: keepalive / responses to requests."""
         while self.running:
             try:
                 message = await self.message_queue.get()
@@ -128,11 +128,11 @@ class TCPClient:
                 time_recv = dt_recv.strftime('%H:%M:%S.%f')[:-3]
 
                 if "keepalive" in message.lower():
-                    # формат keepalive не содержит полей запроса, поэтому фиксируем только врем¤ получени¤
+                    # keepalive format does not contain request fields, so only log the receipt time
                     log_line = f"{date_str};; ;{time_recv};{message}\n"
                     self.logger.info(log_line)
                 else:
-                    # ожидаемый формат ответа сервера: "[<global>/<request_number>] PONG (<client_id>)"
+                    # expected server response format: "[<global>/<request_number>] PONG (<client_id>)"
                     req_num = self._extract_request_number(message)
                     if req_num is not None:
                         self.responses[req_num].append(message)
@@ -143,9 +143,9 @@ class TCPClient:
                 self.error_logger.error(f"Process message error: {e}")
 
     def _extract_request_number(self, message: str) -> Optional[int]:
-        """»звлекает request_number из ответа сервера. ¬озвращает None при неудаче."""
+        """Extracts request_number from the server response. Returns None on failure."""
         try:
-            # пример: "[123/45] PONG (7)" -> берЄм часть после '/' и до ']'
+            # example: "[123/45] PONG (7)" -> take the part after '/' and before ']'
             if '/' in message:
                 right = message.split('/', 1)[1]
                 return int(right.split(']', 1)[0])
@@ -153,11 +153,11 @@ class TCPClient:
             self.error_logger.error(f"Parse response request_number error: {e}; msg='{message}'")
         return None
 
-    # --------------------------- ћќЌ»“ќ–»Ќ√ ќ“¬≈“ќ¬ --------------------------
+    # --------------------------- RESPONSE MONITORING --------------------------
     async def monitor_responses(self, timeout: float = 5.0, poll_interval: float = 0.05) -> None:
         """
-        ѕериодически провер¤ет, не пришЄл ли ответ на каждый pending-request,
-        либо не истЄк ли таймаут. ƒублирующуюс¤ логику вынесено в _finalize_request().
+        Periodically checks if a response has been received for each pending request
+        or if the timeout has expired. Duplicated logic is moved to _finalize_request().
         """
         loop = asyncio.get_running_loop()
         while self.running:
@@ -167,16 +167,16 @@ class TCPClient:
 
                 for request_number in list(self.pending_requests):
                     if self.responses.get(request_number):
-                        # есть ответ Ч забираем первый
+                        # response received — take the first one
                         response = self.responses[request_number].pop(0)
                         self._finalize_request(request_number, response, is_timeout=False)
                         to_finalize.append(request_number)
                     elif now - self.send_times.get(request_number, 0.0) > timeout:
-                        # таймаут
-                        self._finalize_request(request_number, '(таймаут)', is_timeout=True)
+                        # timeout
+                        self._finalize_request(request_number, '(timeout)', is_timeout=True)
                         to_finalize.append(request_number)
 
-                # очистка структур по финализированным запросам
+                # clean up structures for finalized requests
                 for rn in to_finalize:
                     self._cleanup_request(rn)
 
@@ -187,7 +187,7 @@ class TCPClient:
                 self.error_logger.error(f"Monitor error: {e}")
 
     def _finalize_request(self, request_number: int, result: str, *, is_timeout: bool) -> None:
-        """‘ормирует строку лога дл¤ ответа или таймаута и пишет еЄ в журнал событий."""
+        """Forms a log entry for a response or timeout and writes it to the event log."""
         dt_recv = datetime.datetime.now()
         time_recv = dt_recv.strftime('%H:%M:%S.%f')[:-3]
 
@@ -196,21 +196,21 @@ class TCPClient:
         time_send = data.get('time_send', '')
         text_query = data.get('text_query', '')
 
-        payload = result if not is_timeout else result  # '(таймаут)' уже подготовлен
+        payload = result if not is_timeout else result  # '(timeout)' is already prepared
         log_line = f"{date_str};{time_send};{text_query};{time_recv};{payload}\n"
         self.logger.info(log_line)
 
     def _cleanup_request(self, request_number: int) -> None:
-        """”дал¤ет все следы запроса из внутренних структур."""
+        """Removes all traces of a request from internal structures."""
         if request_number in self.pending_requests:
             self.pending_requests.remove(request_number)
         self.responses.pop(request_number, None)
         self.send_times.pop(request_number, None)
         self.request_data.pop(request_number, None)
 
-    # --------------------------- ∆»«Ќ≈ЌЌџ… ÷» Ћ -------------------------------
+    # --------------------------- LIFECYCLE -------------------------------
     def start_background_tasks(self) -> None:
-        """—оздаЄт и регистрирует фоновые таски клиента."""
+        """Creates and registers background tasks for the client."""
         self.tasks = [
             asyncio.create_task(self.listen_for_messages()),
             asyncio.create_task(self.process_messages()),
@@ -218,10 +218,10 @@ class TCPClient:
         ]
 
     async def close(self) -> None:
-        """ќстанавливает клиента и корректно закрывает все ресурсы и таски."""
+        """Stops the client and properly closes all resources and tasks."""
         self.running = False
 
-        # отмен¤ем и дожидаемс¤ фоновых задач
+        # cancel and wait for background tasks
         for t in self.tasks:
             if not t.done():
                 t.cancel()
@@ -229,7 +229,7 @@ class TCPClient:
             await asyncio.gather(*self.tasks, return_exceptions=True)
         self.tasks.clear()
 
-        # закрываем соединение
+        # close the connection
         if self.writer:
             try:
                 self.writer.close()
@@ -239,7 +239,7 @@ class TCPClient:
         self.writer = None
         self.reader = None
 
-        # гарантированно сбрасываем файловые буферы логгеров
+        # ensure loggers' file buffers are flushed
         for handler in self.logger.handlers:
             if isinstance(handler, logging.FileHandler):
                 handler.flush()
@@ -248,7 +248,7 @@ class TCPClient:
                 handler.flush()
 
 
-# ------------------------------- “ќ„ ј ¬’ќƒј --------------------------------
+# ------------------------------- ENTRY POINT --------------------------------
 async def main() -> None:
     client = TCPClient('127.0.0.1', 8888)
     request_counter = 0
@@ -260,20 +260,20 @@ async def main() -> None:
                 client.running = True
                 client.start_background_tasks()
 
-                # основной цикл отправки запросов
+                # main loop for sending requests
                 while client.running:
                     await client.send_ping(request_counter)
                     request_counter += 1
                     await asyncio.sleep(random.uniform(0.3, 3.0))
 
             except (ConnectionError, OSError, asyncio.IncompleteReadError) as e:
-                # соединение разорвалось Ч пробуем переподключитьс¤
+                # connection lost — attempt to reconnect
                 client.error_logger.error(f"Connection lost, will retry: {e}")
                 await client.close()
                 await asyncio.sleep(1.0)
                 continue
     except asyncio.CancelledError:
-        # корректна¤ отмена
+        # proper cancellation
         pass
     finally:
         await client.close()
@@ -285,6 +285,6 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("Client stopped by user")
     except Exception as e:
-        # фатальные ошибки (если что-то упало вне корутин)
+        # fatal errors (if something crashes outside coroutines)
         logging.basicConfig(filename='client_fatal.log', level=logging.ERROR)
         logging.error(f"Fatal client error: {e}")
